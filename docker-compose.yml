@@ -1,35 +1,71 @@
 services:
+  # ---------------------------------------------------------------------------
+  # Shared PostgreSQL — hosts quran_mcp_db (quran_com + quran_mcp schemas)
+  # and the GoodMem DBs (goodmem_qwen_db / goodmem_openai_db)
+  # ---------------------------------------------------------------------------
   db:
-    image: pgvector/pgvector:pg17
+    container_name: db
+    image: ${PG_IMAGE:-pgvector/pgvector:pg17}
     environment:
       POSTGRES_USER: ${QURAN_MCP_DB_USER:-quran_mcp_user}
       POSTGRES_PASSWORD: ${QURAN_MCP_DB_PASSWORD:?Set QURAN_MCP_DB_PASSWORD in .env}
       POSTGRES_DB: ${QURAN_MCP_DB_DATABASE:-quran_mcp_db}
+      # Consumed by 02-init-goodmem.sh to create the GoodMem database(s) on fresh volume.
+      # Space-separated list lets a clean rebuild create both qwen + openai DBs.
+      GM_DATABASES: ${GM_DATABASES:-goodmem_qwen_db goodmem_openai_db}
+      GM_POSTGRES_DB: ${GM_POSTGRES_DB:-goodmem_qwen_db}
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - ${QURAN_MCP_DB_VOLUME}:/var/lib/postgresql/data
+      # - quran-db-data:/var/lib/postgresql/data      
       - ./.db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-      - ./.db/init_db.sh:/docker-entrypoint-initdb.d/02-init-db.sh:ro
-      - ./.db:/docker-entrypoint-initdb.d/dumps:ro
+      - ./.db/init_goodmem_db.sh:/docker-entrypoint-initdb.d/02-init-goodmem.sh:ro
+      - ./.db/init_db.sh:/docker-entrypoint-initdb.d/03-init-db.sh:ro
+      - ./.db/dumps:/docker-entrypoint-initdb.d/dumps:ro
       - ./src/quran_mcp/lib/db/migrations:/docker-entrypoint-initdb.d/migrations:ro
       - ./.db/psqlrc:/root/.psqlrc:ro
+    deploy:
+      resources:
+        reservations:
+          memory: ${DB_MEM_RESERVE:-4g}
+        limits:
+          memory: ${DB_MEM_LIMIT:-12g}
     restart: unless-stopped
+    ports:
+      - "${DB_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${QURAN_MCP_DB_USER:-quran_mcp_user} -d ${QURAN_MCP_DB_DATABASE:-quran_mcp_db}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -h 127.0.0.1 -U ${QURAN_MCP_DB_USER:-quran_mcp_user} -d ${QURAN_MCP_DB_DATABASE:-quran_mcp_db}",
+        ]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: ${DB_HEALTH_START_PERIOD:-300s}
+    networks:
+      - default
 
+  # ---------------------------------------------------------------------------
+  # Quran-MCP application — connects to quran_mcp_db + GoodMem API
+  # ---------------------------------------------------------------------------
   app:
+    container_name: app
     build:
       context: .
       dockerfile: Dockerfile
-    env_file: .env
+    user: "1000:1000" #"${UID:-1000}:${GID:-1000}"
     environment:
       COLUMNS: "200"
       FORCE_COLOR: "1"
       TERM: xterm-256color
-      QURAN_MCP_DB_HOST: db
-      QURAN_MCP_DB_PORT: "5432"
+      QURAN_MCP_DB_HOST: ${QURAN_MCP_DB_HOST:-db}
+      QURAN_MCP_DB_PORT: "${QURAN_MCP_DB_PORT:-5432}"
+      QURAN_MCP_DB_DATABASE: ${QURAN_MCP_DB_DATABASE:-quran_mcp_db}
+      QURAN_MCP_DB_USER: ${QURAN_MCP_DB_USER:-quran_mcp_user}
+      QURAN_MCP_DB_PASSWORD: ${QURAN_MCP_DB_PASSWORD}
+      GOODMEM_API_KEY: ${GOODMEM_API_KEY}
+      DB_SCHEMA: ${DB_SCHEMA:-goodmem}
+      POSTGRES_SEARCH_PATH: ${POSTGRES_SEARCH_PATH:-goodmem,public}
     ports:
       - "${PORT:-8088}:8088"
     volumes:
@@ -37,7 +73,63 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      goodmem:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - default
 
-volumes:
-  db-data:
+  # ---------------------------------------------------------------------------
+  # GoodMem server — connects to the active GoodMem DB (GM_DB_URL / GM_POSTGRES_DB)
+  # ---------------------------------------------------------------------------
+  goodmem:
+    image: ${GOODMEM_IMAGE:-ghcr.io/pair-systems-inc/goodmem/server:latest}
+    container_name: goodmem
+    ports:
+      - "${GOODMEM_REST_PORT:-8080}:8080" # REST API
+      - "${GOODMEM_GRPC_PORT:-9090}:9090" # gRPC
+    environment:
+      DB_URL: ${GM_DB_URL:-jdbc:postgresql://db:5432/goodmem_qwen_db}
+      GM_DB: ${GM_POSTGRES_DB:-goodmem_qwen_db}
+      DB_USER: ${GM_POSTGRES_USER:-quran_mcp_user}
+      DB_PASSWORD: ${GM_POSTGRES_PASSWORD}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:-}
+      GOODMEM_TLS_CERT_FILE: ${GOODMEM_TLS_CERT_FILE:-}
+      GOODMEM_TLS_KEY_FILE: ${GOODMEM_TLS_KEY_FILE:-}
+    deploy:
+      resources:
+        limits:
+          memory: ${GOODMEM_MEM_LIMIT:-8g}
+        reservations:
+          memory: ${GOODMEM_MEM_RESERVE:-2g}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fk https://localhost:8080/readyz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: ${GOODMEM_HEALTH_START_PERIOD:-60s}
+    secrets:
+      - source: goodmem_tls_cert
+        mode: 0444
+      - source: goodmem_tls_key
+        mode: 0444
+    networks:
+      - default
+
+# volumes:
+#   quran-db-data:
+#   mcpc-data:
+
+networks:
+  default:
+    name: ${COMPOSE_NETWORK_NAME:-quran-mcp_default}
+
+secrets:
+  goodmem_tls_cert:
+    file: ${GOODMEM_TLS_CERT_PATH:-./certs/goodmem/cert.pem}
+  goodmem_tls_key:
+    file: ${GOODMEM_TLS_KEY_PATH:-./certs/goodmem/key.pem}

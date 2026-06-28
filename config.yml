@@ -19,22 +19,35 @@ rate_limit:
   daily_global: 200
 
 relay:
-  enabled: false              # Disabled for Connectors Directory submission (Spec 0050.1 Phase 3)
+  enabled: true #false              # Disabled for Connectors Directory submission (Spec 0050.1 Phase 3)
   retention_days: 180         # Days to retain relay data
-# turn_gap_seconds: 60       # Inactivity threshold for new turn
-# max_turn_minutes: 30          # Max turn duration before auto-close
-# log_turn_identity_event: false  # Opt-in: log turn correlation data to .logs/
+  turn_gap_seconds: 60       # Inactivity threshold for new turn
+  max_turn_minutes: 30          # Max turn duration before auto-close
+  log_turn_identity_event: true # false  # Opt-in: log turn correlation data to .logs/
+  # write_token: not needed — your expose_tags include 'preview', so relay writes are authorized without a token
+
 
 # GoodMem semantic memory configuration
 # API key stays in .env (GOODMEM_API_KEY) — it's a secret.
 # Everything else is configuration and belongs here.
+# goodmem:
+#   #api_host: https://goodmem_server:8080   # ← was 9090, REST is on 8080
+#   api_host: https://goodmem:8080   # ← was 9090, REST is on 8080
+#   #embedder: text-embedding-3-large
+#   embedder: text-embedding-3-large
+#   space:
+#     quran: quran
+#     tafsir: tafsir
+#     translation: translation
+#   reranker: voyage-rerank-2.5
+
 goodmem:
-  api_host: https://localhost:8080
-  embedder: text-embedding-3-large
+  api_host: https://goodmem:8080
+  embedder: qwen3-embedding-4b-local
   space:
-    quran: quran
-    tafsir: tafsir
-    translation: translation
+    quran: quran_qwen
+    tafsir: tafsir_qwen
+    translation: translation_qwen
   reranker: voyage-rerank-2.5
 
 # LLM sampling fallback configuration (API keys in .env)
@@ -52,9 +65,10 @@ sentry:
   enabled: false  # Directory-facing default: keep third-party error reporting off unless explicitly re-enabled
 
 # MCP Apps configuration
+# Tareq the interactive app must be true for letting the user interface and AI interface show correct font and text
 mcp_apps:
   show_mushaf:
-    interactive: false  # Interaction UI disabled pending Spec 0072 completion
+    interactive: false  #false  # Interaction UI disabled pending Spec 0072 completion
 
 # Logging configuration
 logging:

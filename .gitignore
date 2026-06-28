@@ -2,6 +2,13 @@
 .env
 .mcp.json
 config.local.yml
+scripts/
+certs/
+sources/
+tareq-v3/
+docker-compose.yml
+.goodmem
+.db
 
 # Python
 .venv
