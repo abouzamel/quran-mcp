@@ -60,5 +60,5 @@ src/quran_mcp/lib/db/migrations/*.sql
 .assets/
 
 # Dolt database files (added by bd init)
-*.db
-!.db/
+#*.db
+#!.db/
