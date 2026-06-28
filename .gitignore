@@ -8,7 +8,7 @@ sources/
 tareq-v3/
 docker-compose.yml
 .goodmem
-.db
+.db/
 
 # Python
 .venv
